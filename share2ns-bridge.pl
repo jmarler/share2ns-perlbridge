@@ -53,7 +53,6 @@ my $data_json     = new JSON;
 my $response_json = $client->responseContent();
 $response_json    =~ s/[\[\]]//g;
 my $latest_data     = $data_json->decode($response_json);
-print Dumper($latest_data);
 
 # Convert Dexcom values to NightScout values
 my $dt      = $latest_data->{'DT'};
@@ -66,12 +65,12 @@ $st  =~ s/[\/Date()]//g;
 
 # Build array of data to send to Nightscout
 my $to_ns   = {
-				'sgv'        => $bgvalue,
-				'date'       => $wt,
+				'sgv'        => $bgvalue*1,
+				'date'       => $wt*1,
 				'dateString' => strftime("%a %b %e %H:%M:%S %Z %Y", localtime($wt/1000)), 
-				'trend'      => $trend,
+				'trend'      => $trend*1,
 				'direction'  => $trends[$trend],
-				'device'     => 'dexcom',
+				'device'     => 'share2',
 				'type'       => 'sgv'
 };
 
@@ -88,8 +87,5 @@ $client->setHost($config{ns_host});
 # Setup headers for Nightscout upload
 my $headers   = {'Accept' => 'application/json', 'User-Agent' => $config{agent_tag}, 'Content-Type' => 'application/json', 'api-secret' => sha1_hex($config{ns_api_secret}) };
 
-print "NS Entry: " . $ns_entry . "\n";
 # Send login request to receive latest data set
 $client->POST($config{ns_uri},$ns_entry,$headers);
-
-print "Response: \n" . $client->responseContent() . "\n";
