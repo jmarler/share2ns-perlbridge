@@ -21,26 +21,34 @@ $trends[9] = 'RATE OUT OF RANGE';
 
 # Setup default command-line parameters
 my $minutes  = 1440;
-my $maxcount = 1;
+my $maxcount = 10;
 my $help     = '';
+my $quiet    = '';
 
 # Process command-line arguments
-GetOptions ("minutes=i" => \$minutes, "maxcount=i" => \$maxcounti, "h" => \$help ) or usage();
+GetOptions ("minutes=i" => \$minutes, "maxcount=i" => \$maxcount, "h" => \$help, "q" => \$quiet ) or usage();
 usage() if $help;
 
 # Display usage text
 sub usage {
-    die ("\nUsage: share2ns-bridge.pl {options}\n\n Options:\n\n   --minutes xx  - Number of minutes to query is xx (optional - default 1440)\n   --maxcount yy - Maximum number of records to query is yy (optional - default 1)\n\n");
+    die ("\nUsage: share2ns-bridge.pl {options}\n\n Options:\n\n   --minutes xx  - Number of minutes to query is xx (optional - default 1440)\n   --maxcount yy - Maximum number of records to query is yy (optional - default 10)\n   -q            - Quiet mode. Supress all output. (useful for cron)\n\n");
 }
-
-
 
 # Load and set configuration variables
 if (-e 'config.pl') {
-    my %config   = do 'config.pl';
+    # Do nothing
+    if (!$quiet) { print "Loaded config.pl values.\n"; }
 } else { 
     die ("\n You must first create config.pl. Use the included config.pl.orig as a template, or see https://github.com/jmarler/share2ns-bridge\n\n");
 }
+
+# Load configuration values
+my %config = do 'config.pl';
+
+# Display command line parameters
+$oldesttime = time - ($minutes*60);
+$oldest     = strftime("%a %b %e %H:%M:%S %Z %Y", localtime($oldesttime));
+if (!$quiet) { print "Loading a maximum of " . $maxcount . " records searching back to " . $oldest . "\n"; }
 
 # Create login request
 my %loginhash = ('password' => $config{dexcom_password}, 'accountName' => $config{dexcom_username}, 'applicationId' => $config{application_id} );
@@ -54,59 +62,76 @@ my $client = REST::Client->new();
 $client->setHost($config{dexcom_login_host});
 
 # Send login request to receive session token
+if (!$quiet) { print "Logging in to Dexcom host " . $config{dexcom_login_host} . " . . . "; }
 $client->POST($config{dexcom_login_uri},$loginbody,$headers);
+if (!$quiet) { print "done.\n"; }
 
+# Check to see if login was successful
+if ($client->responseCode() != '200') { die ("Dexcom login failed. Check config.pl values, and connectivity to " . $dexcom_login_host . "\n"); }
 # Collect session token from response and clean up
 my $session_id = $client->responseContent();
 $session_id =~ s/"//g;
 
 # Create URL for data request
-my $data_uri_full = $config{dexcom_data_uri} . "?sessionID=" . $session_id . "&minutes=1440&maxCount=1";
+my $data_uri_full = $config{dexcom_data_uri} . "?sessionID=" . $session_id . "&minutes=" . $minutes . "&maxCount=" . $maxcount;
 
 # Set client parameters
 $client->setHost($config{dexcom_data_host});
 
 # Send login request to receive latest data set
+if (!$quiet) { print "Requesting data from " . $config{dexcom_data_host} . " . . . "; }
 $client->POST($data_uri_full,'',$headers);
+if (!$quiet) { print "done.\n"; }
 
 # Parse response from Dexcom server
-my $data_json     = new JSON;
+my $records       = 0;
 my $response_json = $client->responseContent();
-$response_json    =~ s/[\[\]]//g;
-my $latest_data     = $data_json->decode($response_json);
+my @all_data      = @{decode_json($response_json)};
 
-# Convert Dexcom values to NightScout values
-my $dt      = $latest_data->{'DT'};
-my $st      = $latest_data->{'ST'};
-my $wt      = $latest_data->{'WT'};
-my $bgvalue = $latest_data->{'Value'};
-my $trend   = $latest_data->{'Trend'};
-$wt  =~ s/[\/Date()]//g;
-$st  =~ s/[\/Date()]//g;
+# Iterate through all of the returned records
+foreach my $latest_data ( @all_data ) {
+   $records++;
+   # Convert Dexcom values to NightScout values
+   my $dt      = $latest_data->{'DT'};
+   my $st      = $latest_data->{'ST'};
+   my $wt      = $latest_data->{'WT'};
+   my $bgvalue = $latest_data->{'Value'};
+   my $trend   = $latest_data->{'Trend'};
+   $wt  =~ s/[\/Date()]//g;
+   $st  =~ s/[\/Date()]//g;
+   
+   # Build array of data to send to Nightscout
+   my $to_ns   = {
+   				'sgv'        => $bgvalue*1,
+   				'date'       => $wt*1,
+   				'dateString' => strftime("%a %b %e %H:%M:%S %Z %Y", localtime($wt/1000)), 
+   				'trend'      => $trend*1,
+   				'direction'  => $trends[$trend],
+   				'device'     => 'share2',
+   				'type'       => 'sgv'
+   };
 
-# Build array of data to send to Nightscout
-my $to_ns   = {
-				'sgv'        => $bgvalue*1,
-				'date'       => $wt*1,
-				'dateString' => strftime("%a %b %e %H:%M:%S %Z %Y", localtime($wt/1000)), 
-				'trend'      => $trend*1,
-				'direction'  => $trends[$trend],
-				'device'     => 'share2',
-				'type'       => 'sgv'
-};
+   # Display record
+   if (!$quiet) { print "Record:" . $records . "\n sgv: ".$bgvalue."\n date: ".strftime("%a %b %e %H:%M:%S %Z %Y", localtime($wt/1000)) . "\n trend: " . $trend . " - " . $trends[$trend] . "\n device: share2\n type: sgv\n"; }
+   
+   # Create JSON for entry to upload
+   my $entry_json = new JSON;
+   my $ns_entry   = $entry_json->encode($to_ns);
+   
+   # Create new REST Client
+   my $client = REST::Client->new();
+   
+   # Set client parameters
+   $client->setHost($config{ns_host});
+   
+   # Setup headers for Nightscout upload
+   my $headers   = {'Accept' => 'application/json', 'User-Agent' => $config{agent_tag}, 'Content-Type' => 'application/json', 'api-secret' => sha1_hex($config{ns_api_secret}) };
+   
+   # Send login request to receive latest data set
+   if (!$quiet) { print "Sending data to nightscout URL: " . $config{ns_host} . " . . ."; }
+   $client->POST($config{ns_uri},$ns_entry,$headers);
+   if (!$quiet) { print "done.\n"; }
+}
 
-# Create JSON for entry to upload
-my $entry_json = new JSON;
-my $ns_entry   = $data_json->encode($to_ns);
+if (!$quiet) { print "Processed " . $records . " entries.\n"; }
 
-# Create new REST Client
-my $client = REST::Client->new();
-
-# Set client parameters
-$client->setHost($config{ns_host});
-
-# Setup headers for Nightscout upload
-my $headers   = {'Accept' => 'application/json', 'User-Agent' => $config{agent_tag}, 'Content-Type' => 'application/json', 'api-secret' => sha1_hex($config{ns_api_secret}) };
-
-# Send login request to receive latest data set
-$client->POST($config{ns_uri},$ns_entry,$headers);
