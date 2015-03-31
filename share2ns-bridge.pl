@@ -4,6 +4,7 @@ use REST::Client;
 use JSON;
 use POSIX qw(strftime);
 use Digest::SHA1 qw(sha1_hex);
+use Getopt::Long;
 use Data::Dumper;
 
 # Create array of trend directions
@@ -17,9 +18,29 @@ $trends[6] = 'SingleDown';
 $trends[7] = 'DoubleDown';
 $trends[8] = 'NOT COMPUTABLE';
 $trends[9] = 'RATE OUT OF RANGE';
- 
+
+# Setup default command-line parameters
+my $minutes  = 1440;
+my $maxcount = 1;
+my $help     = '';
+
+# Process command-line arguments
+GetOptions ("minutes=i" => \$minutes, "maxcount=i" => \$maxcounti, "h" => \$help ) or usage();
+usage() if $help;
+
+# Display usage text
+sub usage {
+    die ("\nUsage: share2ns-bridge.pl {options}\n\n Options:\n\n   --minutes xx  - Number of minutes to query is xx (optional - default 1440)\n   --maxcount yy - Maximum number of records to query is yy (optional - default 1)\n\n");
+}
+
+
+
 # Load and set configuration variables
-my %config   = do 'config.pl';
+if (-e 'config.pl') {
+    my %config   = do 'config.pl';
+} else { 
+    die ("\n You must first create config.pl. Use the included config.pl.orig as a template, or see https://github.com/jmarler/share2ns-bridge\n\n");
+}
 
 # Create login request
 my %loginhash = ('password' => $config{dexcom_password}, 'accountName' => $config{dexcom_username}, 'applicationId' => $config{application_id} );
