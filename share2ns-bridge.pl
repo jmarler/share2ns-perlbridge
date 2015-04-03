@@ -20,6 +20,7 @@ $trends[8] = 'NOT COMPUTABLE';
 $trends[9] = 'RATE OUT OF RANGE';
 
 # Setup default command-line parameters
+$ENV{'PERL_LWP_SSL_VERIFY_HOSTNAME'} = 0;
 my $minutes  = 1440;
 my $maxcount = 10;
 my $help     = '';
@@ -34,16 +35,19 @@ sub usage {
     die ("\nUsage: share2ns-bridge.pl {options}\n\n Options:\n\n   --minutes xx  - Number of minutes to query is xx (optional - default 1440)\n   --maxcount yy - Maximum number of records to query is yy (optional - default 10)\n   -q            - Quiet mode. Supress all output. (useful for cron)\n\n");
 }
 
-# Load and set configuration variables
-if (-e 'config.pl') {
-    # Do nothing
-    if (!$quiet) { print "Loaded config.pl values.\n"; }
-} else { 
-    die ("\n You must first create config.pl. Use the included config.pl.orig as a template, or see https://github.com/jmarler/share2ns-bridge\n\n");
-}
-
-# Load configuration values
-my %config = do 'config.pl';
+# Set configuration values
+my %config = ( 
+dexcom_login_host => 'https://share1.dexcom.com',
+dexcom_data_host  => 'https://share1.dexcom.com',
+application_id    => 'd89443d2-327c-4a6f-89e5-496bbb0317db',
+agent_tag         => 'Dexcom Share/3.0.2.11 CFNetwork/711.2.23 Darwin/14.0.0',
+dexcom_login_uri  => '/ShareWebServices/Services/General/LoginPublisherAccountByName',
+dexcom_data_uri   => '/ShareWebServices/Services/Publisher/ReadPublisherLatestGlucoseValues',
+dexcom_username   => '',
+dexcom_password   => '',
+ns_uri            => '/api/v1/entries.json',
+ns_host           => 'http://',
+ns_api_secret     => '');
 
 # Display command line parameters
 $oldesttime = time - ($minutes*60);
@@ -67,7 +71,7 @@ $client->POST($config{dexcom_login_uri},$loginbody,$headers);
 if (!$quiet) { print "done.\n"; }
 
 # Check to see if login was successful
-if ($client->responseCode() != '200') { die ("Dexcom login failed. Check config.pl values, and connectivity to " . $dexcom_login_host . "\n"); }
+if ($client->responseCode() != '200') { die ("Dexcom login failed with HTTP error " . $client->responseCode() . ". Check config.pl values, and connectivity to " . $config{dexcom_login_host} . "\n" . $client ->responseContent()); }
 # Collect session token from response and clean up
 my $session_id = $client->responseContent();
 $session_id =~ s/"//g;
